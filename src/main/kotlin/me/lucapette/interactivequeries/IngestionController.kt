@@ -12,8 +12,7 @@ class IngestionController(private val producer: KafkaProducer<String, String>) {
 
     @PostMapping("/accept")
     fun accept(@RequestBody() input: IngestionRequest) {
-
-        producer.send(ProducerRecord("words", input.word, input.word)).get()
+        producer.send(ProducerRecord("words", input.word.lowercase(), input.word)).get()
     }
 }
 

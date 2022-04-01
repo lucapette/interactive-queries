@@ -1,11 +1,7 @@
 package me.lucapette.interactivequeries
 
 import org.apache.kafka.common.serialization.Serdes
-import org.apache.kafka.streams.KafkaStreams
-import org.apache.kafka.streams.StoreQueryParameters
-import org.apache.kafka.streams.StreamsBuilder
-import org.apache.kafka.streams.StreamsConfig
-import org.apache.kafka.streams.Topology
+import org.apache.kafka.streams.*
 import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.Grouped
 import org.apache.kafka.streams.kstream.Materialized
@@ -14,7 +10,8 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationStartedEvent
 import org.springframework.context.ApplicationListener
-import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import java.util.*
 
@@ -29,7 +26,7 @@ class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
     init {
         val props = Properties()
 
-        props[StreamsConfig.APPLICATION_ID_CONFIG] = "word-count-v1"
+        props[StreamsConfig.APPLICATION_ID_CONFIG] = "words-count-controller-v1"
         props[StreamsConfig.BOOTSTRAP_SERVERS_CONFIG] = "localhost:9092"
         props[StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
         props[StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
@@ -57,18 +54,20 @@ class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
         kafkaStreams.start()
     }
 
-    @GetMapping("/info")
-    fun info() {
-        kafkaStreams.store(
+    @PostMapping("/search")
+    fun search(@RequestBody input: SearchRequest): SearchResponse {
+        val store = kafkaStreams.store(
             StoreQueryParameters.fromNameAndType(
                 "words_count",
                 QueryableStoreTypes.keyValueStore<String, Long>()
             )
         )
-            .all()
-            .forEach {
-                log.info("{} : {}", it.key, it.value)
-            }
+
+        return SearchResponse(input.query, store.get(input.query))
     }
 
 }
+
+data class SearchRequest(val query: String)
+
+data class SearchResponse(val word: String, val count: Long)
