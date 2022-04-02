@@ -10,13 +10,14 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationStartedEvent
 import org.springframework.context.ApplicationListener
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
-import java.util.*
+import java.util.Properties
 
 @RestController
-class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
+class WordsCountController(config: KafkaConfig) : ApplicationListener<ApplicationStartedEvent> {
     private final val kafkaStreams: KafkaStreams
 
     companion object {
@@ -27,13 +28,13 @@ class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
         val props = Properties()
 
         props[StreamsConfig.APPLICATION_ID_CONFIG] = "words-count-controller-v1"
-        props[StreamsConfig.BOOTSTRAP_SERVERS_CONFIG] = "localhost:9092"
+        props[StreamsConfig.APPLICATION_SERVER_CONFIG] = "#${config.rpcHost}:${config.rpcPort}"
+        props[StreamsConfig.BOOTSTRAP_SERVERS_CONFIG] = config.bootstrapServers
         props[StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
         props[StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
+        props[StreamsConfig.STATE_DIR_CONFIG] = "~/tmp/kafka-streams/words-count-controller-v1-${config.instanceId}"
 
-        val config = StreamsConfig(props)
-
-        kafkaStreams = KafkaStreams(buildTopology(), config)
+        kafkaStreams = KafkaStreams(buildTopology(), StreamsConfig(props))
     }
 
     private fun buildTopology(): Topology {
@@ -55,7 +56,7 @@ class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
     }
 
     @PostMapping("/search")
-    fun search(@RequestBody input: SearchRequest): SearchResponse {
+    fun search(@RequestBody input: SearchRequest): ResponseEntity<SearchResponse> {
         val store = kafkaStreams.store(
             StoreQueryParameters.fromNameAndType(
                 "words_count",
@@ -63,7 +64,9 @@ class WordsCountController : ApplicationListener<ApplicationStartedEvent> {
             )
         )
 
-        return SearchResponse(input.query, store.get(input.query))
+        val count = store.get(input.query) ?: return ResponseEntity.notFound().build()
+
+        return ResponseEntity.ok(SearchResponse(input.query, count))
     }
 
 }
