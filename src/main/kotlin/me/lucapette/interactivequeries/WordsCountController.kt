@@ -5,6 +5,7 @@ import org.apache.kafka.streams.*
 import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.Grouped
 import org.apache.kafka.streams.kstream.Materialized
+import org.apache.kafka.streams.state.HostInfo
 import org.apache.kafka.streams.state.QueryableStoreTypes
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -14,25 +15,32 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
-import java.util.Properties
+import org.springframework.web.client.RestTemplate
+import java.util.*
 
 @RestController
-class WordsCountController(config: KafkaConfig) : ApplicationListener<ApplicationStartedEvent> {
+class WordsCountController(config: KafkaConfig, restTemplate: RestTemplate) :
+    ApplicationListener<ApplicationStartedEvent> {
     private final val kafkaStreams: KafkaStreams
+    private final val config: KafkaConfig
+    private final val restTemplate: RestTemplate
 
     companion object {
         val log: Logger = LoggerFactory.getLogger(WordsCountController::class.java)
     }
 
     init {
+        this.config = config
+        this.restTemplate = restTemplate
         val props = Properties()
 
         props[StreamsConfig.APPLICATION_ID_CONFIG] = "words-count-controller-v1"
-        props[StreamsConfig.APPLICATION_SERVER_CONFIG] = "#${config.rpcHost}:${config.rpcPort}"
+        props[StreamsConfig.APPLICATION_SERVER_CONFIG] = "#${config.rpcHost}:${this.config.rpcPort}"
         props[StreamsConfig.BOOTSTRAP_SERVERS_CONFIG] = config.bootstrapServers
         props[StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
         props[StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG] = Serdes.String().javaClass.name
-        props[StreamsConfig.STATE_DIR_CONFIG] = "~/tmp/kafka-streams/words-count-controller-v1-${config.instanceId}"
+        props[StreamsConfig.STATE_DIR_CONFIG] =
+            "~/tmp/kafka-streams/words-count-controller-v1-${this.config.instanceId}"
 
         kafkaStreams = KafkaStreams(buildTopology(), StreamsConfig(props))
     }
@@ -64,9 +72,40 @@ class WordsCountController(config: KafkaConfig) : ApplicationListener<Applicatio
             )
         )
 
-        val count = store.get(input.query) ?: return ResponseEntity.notFound().build()
+        val keyQueryMetadata =
+            kafkaStreams.queryMetadataForKey("words_count", input.query, Serdes.String().serializer())
 
-        return ResponseEntity.ok(SearchResponse(input.query, count))
+        when (val activeHost = keyQueryMetadata.activeHost()) {
+            HostInfo(config.rpcHost, config.rpcPort) -> {
+                val count = store.get(input.query) ?: return ResponseEntity.notFound().build()
+                return ResponseEntity.ok(SearchResponse(input.query, count))
+            }
+            HostInfo.unavailable() -> {
+                return ResponseEntity.notFound().build()
+            }
+            else -> {
+                try {
+                    val response = restTemplate.postForEntity(
+                        "http://${activeHost.host()}:${activeHost.port()}/search",
+                        input,
+                        SearchResponse::class.java
+                    )
+                    return when {
+                        response.statusCode.is2xxSuccessful -> {
+                            ResponseEntity.ok(SearchResponse(input.query, response.body?.count ?: 0))
+                        }
+                        else -> {
+                            ResponseEntity.notFound().build()
+                        }
+                    }
+                } catch (e: Exception) {
+                    log.error("Error while trying to RPC from  ${activeHost.host()}:${activeHost.port()}", e)
+                    return ResponseEntity.notFound().build()
+                }
+
+
+            }
+        }
     }
 
 }

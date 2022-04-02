@@ -9,5 +9,5 @@ data class KafkaConfig(
     val bootstrapServers: String,
     val instanceId: String,
     val rpcHost: String,
-    val rpcPort: String
+    val rpcPort: Int,
 )
