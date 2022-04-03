@@ -15,10 +15,10 @@ import java.time.Duration
 @EnableConfigurationProperties(KafkaConfig::class)
 class InteractiveQueriesApplication {
     @Bean
-    fun producer(): KafkaProducer<String, String> {
+    fun producer(config: KafkaConfig): KafkaProducer<String, String> {
         return KafkaProducer(
             mapOf(
-                "bootstrap.servers" to "localhost:9092",
+                "bootstrap.servers" to config.bootstrapServers,
                 "key.serializer" to StringSerializer::class.java.name,
                 "value.serializer" to StringSerializer::class.java.name,
             )
