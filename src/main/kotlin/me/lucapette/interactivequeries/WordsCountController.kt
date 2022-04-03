@@ -1,7 +1,11 @@
 package me.lucapette.interactivequeries
 
 import org.apache.kafka.common.serialization.Serdes
-import org.apache.kafka.streams.*
+import org.apache.kafka.streams.KafkaStreams
+import org.apache.kafka.streams.StoreQueryParameters
+import org.apache.kafka.streams.StreamsBuilder
+import org.apache.kafka.streams.StreamsConfig
+import org.apache.kafka.streams.Topology
 import org.apache.kafka.streams.kstream.Consumed
 import org.apache.kafka.streams.kstream.Grouped
 import org.apache.kafka.streams.kstream.Materialized
@@ -15,8 +19,9 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.client.RestTemplate
-import java.util.*
+import java.util.Properties
 
 @RestController
 class WordsCountController(config: KafkaConfig, restTemplate: RestTemplate) :
@@ -49,8 +54,7 @@ class WordsCountController(config: KafkaConfig, restTemplate: RestTemplate) :
         val builder = StreamsBuilder()
 
         builder.stream<String, String>("words", Consumed.`as`("words_input_topic"))
-            .groupByKey(Grouped.`as`("group_by_word"))
-            .count(Materialized.`as`("words_count"))
+            .groupByKey(Grouped.`as`("group_by_word")).count(Materialized.`as`("words_count"))
 
         val topology = builder.build()
 
@@ -67,44 +71,36 @@ class WordsCountController(config: KafkaConfig, restTemplate: RestTemplate) :
     fun search(@RequestBody input: SearchRequest): ResponseEntity<SearchResponse> {
         val store = kafkaStreams.store(
             StoreQueryParameters.fromNameAndType(
-                "words_count",
-                QueryableStoreTypes.keyValueStore<String, Long>()
+                "words_count", QueryableStoreTypes.keyValueStore<String, Long>()
             )
         )
 
         val keyQueryMetadata =
             kafkaStreams.queryMetadataForKey("words_count", input.query, Serdes.String().serializer())
 
-        when (val activeHost = keyQueryMetadata.activeHost()) {
+        return when (val activeHost = keyQueryMetadata.activeHost()) {
             HostInfo(config.rpcHost, config.rpcPort) -> {
                 val count = store.get(input.query) ?: return ResponseEntity.notFound().build()
-                return ResponseEntity.ok(SearchResponse(input.query, count))
+                ResponseEntity.ok(SearchResponse(input.query, count))
             }
-            HostInfo.unavailable() -> {
-                return ResponseEntity.notFound().build()
-            }
-            else -> {
-                try {
-                    val response = restTemplate.postForEntity(
-                        "http://${activeHost.host()}:${activeHost.port()}/search",
-                        input,
-                        SearchResponse::class.java
-                    )
-                    return when {
-                        response.statusCode.is2xxSuccessful -> {
-                            ResponseEntity.ok(SearchResponse(input.query, response.body?.count ?: 0))
-                        }
-                        else -> {
-                            ResponseEntity.notFound().build()
-                        }
-                    }
-                } catch (e: Exception) {
-                    log.error("Error while trying to RPC from  ${activeHost.host()}:${activeHost.port()}", e)
-                    return ResponseEntity.notFound().build()
-                }
+            HostInfo.unavailable() -> ResponseEntity.notFound().build()
+            else -> fetchViaRPC(activeHost, input)
+        }
+    }
 
-
+    fun fetchViaRPC(activeHost: HostInfo, input: SearchRequest): ResponseEntity<SearchResponse> {
+        return try {
+            val response = restTemplate.postForEntity(
+                "http://${activeHost.host()}:${activeHost.port()}/search", input, SearchResponse::class.java
+            )
+            if (response.statusCode.is2xxSuccessful) {
+                ResponseEntity.ok(SearchResponse(input.query, response.body?.count ?: 0))
+            } else {
+                ResponseEntity.notFound().build()
             }
+        } catch (e: RestClientResponseException) {
+            log.error("Error while trying to RPC from  ${activeHost.host()}:${activeHost.port()}", e)
+            ResponseEntity.notFound().build()
         }
     }
 
