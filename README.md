@@ -1,3 +1,4 @@
-# Interactive queries on Kubernetes
+# HTTP endpoints with Interactive queries
 
-A purposefully trivial application for an article on my blog.
+A purposefully trivial application for the article [HTTP endpoints with Kafka Streams Interactive queries](https://lucapette.me/writing/http-endpoints-with-kafka-streams-interactive-queries/).
+
